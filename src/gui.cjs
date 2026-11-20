@@ -1,3 +1,9 @@
+/**
+ * dom-contract-exception: this file is the hand-written, dependency-free bundle (no build step),
+ * so it carries the reference implementation of the pattern that `opencode-plugin-dom` packages:
+ * one filtered observer, an O(1) steady-state check, a backoff probe while the header is absent,
+ * and disposal on teardown. Port it to `createAnchor` when this plugin gains a build step.
+ */
 "use strict";
 
 /**
@@ -78,11 +84,23 @@ function report(kind, data) {
  */
 function buildCss(attribute, className, toggle) {
   return [
+    // The row becomes two grid columns: the title keeps `minmax(0, 1fr)` and the
+    // second line moves into the trailing cell. Only the line itself is taken out
+    // of the host's absolute flow; its children keep theirs, because forcing the
+    // inner `span.absolute` to static moved a positioned child to the sidebar's
+    // top-left corner.
     `html[${attribute}] ${ITEM}{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:center!important;height:24px!important;padding:2px 8px!important;gap:6px!important;border-radius:4px!important}`,
     `html[${attribute}] ${ITEM}>:first-child{width:auto!important;min-width:0!important;height:16px!important}`,
-    `html[${attribute}] ${ITEM}>:nth-child(2){position:static!important;width:auto!important;height:16px!important;padding:0!important;gap:4px!important}`,
+    // No `position` override here: the host positions the line `relative`, and its
+    // absolute children (the row's tooltip trigger and status overlay) resolve
+    // against it. Forcing `static` removed that containing block, so an absolute
+    // child escaped to the page origin and showed up as an icon in the window's
+    // top-left corner.
+    `html[${attribute}] ${ITEM}>:nth-child(2){width:auto!important;height:16px!important;padding:0!important;gap:4px!important}`,
+    // The project group is an absolutely positioned icon plus the text span.
+    // Hiding only the text left the icon at the line's start, over the age.
+    `html[${attribute}] ${ITEM}>:nth-child(2)>div.absolute{display:none!important}`,
     `html[${attribute}] ${ITEM}>:nth-child(2)>span.flex-1{display:none!important}`,
-    `html[${attribute}] ${ITEM}>:nth-child(2)>span.absolute{position:static!important;inset:auto!important}`,
     `html[${attribute}] ${ITEM}>:nth-child(2)>:last-child{margin-inline-start:0!important;gap:4px!important}`,
     `html[${attribute}] ${SCROLL}{gap:1px!important}`,
     `.${className}{display:inline-flex!important;align-items:center!important;justify-content:center!important;width:28px!important;height:28px!important;flex:none!important;padding:0!important;border:0!important;border-radius:6px!important;background:transparent!important;color:var(--v2-icon-icon-muted,light-dark(#5f5f5f,#8a8a8a))!important;cursor:pointer!important;-webkit-app-region:no-drag!important;transition:color 120ms ease,background-color 120ms ease,opacity 120ms ease!important}`,
@@ -180,11 +198,17 @@ function define() {
       const lang = () => (doc ? doc.documentElement.lang : "en");
 
       let button;
+      let dispose;
       /**
        * The header that currently hosts the switch. Remembering it turns the
        * per-mutation check into a few property reads instead of a document scan.
        */
       let slot;
+
+      // A GUI reload re-evaluates this file, so module scope is fresh and the
+      // previous instance's button is still in the document. Drop any stale one
+      // before mounting: otherwise every reload adds another switch.
+      if (doc) for (const stale of doc.querySelectorAll(`[${TOGGLE}]`)) stale.remove();
 
       /** Attribute writes on the live header are re-renders of the host, so only touch changed values. */
       const mark = (name, value) => {
@@ -211,12 +235,29 @@ function define() {
        * host left it. A route or layout change rebuilds the header, and that is
        * the only case that needs the switch re-attached.
        */
+      /**
+       * True when `element` sits before `other` among the same parent's children.
+       * A sibling walk, not `compareDocumentPosition`: the header is a handful of
+       * children, and the check stays easy to test with the fake DOM.
+       */
+      const precedes = (element, other) => {
+        if (!element || !other || element === other || element.parentElement !== other.parentElement) return false
+
+        for (let node = element.nextElementSibling; node; node = node.nextElementSibling) {
+          if (node === other) return true;
+        }
+
+        return false;
+      };
+
       const mounted = () =>
         Boolean(button && slot) &&
         slot.header.isConnected &&
-        slot.before.parentElement === slot.header &&
         button.parentElement === slot.header &&
-        button.nextElementSibling === slot.before;
+        // "Somewhere before the anchor", not "immediately before it": another
+        // plugin may insert its own control in between, and demanding the exact
+        // sibling made the two re-insert themselves at the observer's rate.
+        (!slot.before || precedes(button, slot.before));
 
       const mount = (next) => {
         slot = next;
@@ -476,14 +517,15 @@ function define() {
         });
 
         // The GUI half is re-evaluated on reload; drop the previous observer so a
-        // second setup cannot double the work.
+        // second setup cannot double the work. The host runs the returned cleanup
+        // on reload too, which also removes this instance's button.
         if (attached) attached.dispose();
-        attached = {
-          dispose: () => {
-            observer.disconnect();
-            if (probeTimer !== undefined) clearTimeout(probeTimer);
-          },
+        dispose = () => {
+          observer.disconnect();
+          if (probeTimer !== undefined) clearTimeout(probeTimer);
+          if (button) button.remove();
         };
+        attached = { dispose };
       }
 
       context.add(Style, CSS);
@@ -496,6 +538,11 @@ function define() {
       }));
 
       apply(enabled());
+
+      return () => {
+        if (dispose) dispose();
+        else if (button) button.remove();
+      };
     },
   });
 }

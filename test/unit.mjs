@@ -335,6 +335,7 @@ await check("bundle default-exports a Plugin.define with a window setup and a pr
 await check("rows become a single 24px grid line and the list tightens", () => {
   assert.match(CSS, /data-slot="sidebar-inbox-item"\]\{display:grid!important/);
   assert.match(CSS, /grid-template-columns:minmax\(0,1fr\) auto!important/);
+  assert.doesNotMatch(CSS, /span\.absolute\{position:static/, "inner positioned children keep the host's placement");
   assert.match(CSS, /data-slot="sidebar-inbox-item"\]\{[^}]*height:24px!important/);
   assert.match(CSS, /data-slot="sidebar-inbox-scroll"\]\{gap:1px!important\}/);
 });
@@ -342,7 +343,13 @@ await check("rows become a single 24px grid line and the list tightens", () => {
 await check("the status and age group survives while project/branch is hidden", () => {
   // The old behaviour collapsed the whole second line; that is what dropped the time and the indicators.
   assert.doesNotMatch(CSS, /:nth-child\(2\)\{display:none/);
+  assert.match(CSS, /:nth-child\(2\)>div\.absolute\{display:none!important\}/);
   assert.match(CSS, /:nth-child\(2\)>span\.flex-1\{display:none!important\}/);
+  assert.doesNotMatch(
+    CSS,
+    /:nth-child\(2\)\{[^}]*position:/,
+    "the line keeps the host's positioning so its absolute children stay inside the row",
+  );
   assert.match(CSS, /:nth-child\(2\)>:last-child\{margin-inline-start:0!important/);
 });
 
